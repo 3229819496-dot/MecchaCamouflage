@@ -20,23 +20,26 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.UEPSEUDO_DEPLOY_KEY }}
 
+      # ------------------------------------------------------------------ #
+      #  RE-UE4SS 源码（适配 UE 5.6 的自定义分支 meccha-v3.1.0）           #
+      # ------------------------------------------------------------------ #
       - name: Cache RE-UE4SS source
         uses: actions/cache@v4
         with:
           path: external/RE-UE4SS
-          key: ${{ runner.os }}-re-ue4ss-meccha-v3.0.1
+          key: ${{ runner.os }}-re-ue4ss-meccha-v3.1.0
 
       - name: Checkout RE-UE4SS
         shell: pwsh
         run: |
           if (Test-Path "external/RE-UE4SS/.git") {
-            git -C external/RE-UE4SS fetch --depth 1 origin meccha-v3.0.1
+            git -C external/RE-UE4SS fetch --depth 1 origin meccha-v3.1.0
             git -C external/RE-UE4SS checkout --force FETCH_HEAD
             git -C external/RE-UE4SS reset --hard FETCH_HEAD
           }
           else {
             Remove-Item -Recurse -Force external/RE-UE4SS -ErrorAction SilentlyContinue
-            git clone --depth 1 --branch meccha-v3.0.1 https://github.com/acentrist/RE-UE4SS.git external/RE-UE4SS
+            git clone --depth 1 --branch meccha-v3.1.0 https://github.com/acentrist/RE-UE4SS.git external/RE-UE4SS
           }
           git -C external/RE-UE4SS submodule sync --recursive
           git -C external/RE-UE4SS submodule update --init --recursive
@@ -47,25 +50,28 @@ jobs:
             throw "RE-UE4SS deps/first/patternsleuth submodule was not checked out"
           }
 
+      # ------------------------------------------------------------------ #
+      #  UE4SS 运行时（v3.1.0 — 首个官方支持 UE 5.6 的稳定版本）           #
+      # ------------------------------------------------------------------ #
       - name: Cache UE4SS runtime
         uses: actions/cache@v4
         with:
           path: |
-            external/UE4SS_v3.0.1.zip
+            external/UE4SS_v3.1.0.zip
             external/UE4SS-runtime
-          key: ${{ runner.os }}-ue4ss-runtime-v3.0.1
+          key: ${{ runner.os }}-ue4ss-runtime-v3.1.0
 
       - name: Download UE4SS runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force external | Out-Null
           if (-not (Test-Path "external/UE4SS-runtime/UE4SS.dll")) {
-            if (-not (Test-Path "external/UE4SS_v3.0.1.zip")) {
+            if (-not (Test-Path "external/UE4SS_v3.1.0.zip")) {
               Invoke-WebRequest `
-                -Uri "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/v3.0.1/UE4SS_v3.0.1.zip" `
-                -OutFile "external/UE4SS_v3.0.1.zip"
+                -Uri "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/v3.1.0/UE4SS_v3.1.0.zip" `
+                -OutFile "external/UE4SS_v3.1.0.zip"
             }
-            Expand-Archive -Force "external/UE4SS_v3.0.1.zip" "external/UE4SS-runtime"
+            Expand-Archive -Force "external/UE4SS_v3.1.0.zip" "external/UE4SS-runtime"
           }
 
       - name: Set up MSVC
@@ -88,6 +94,9 @@ jobs:
           rustc --version
           cargo --version
 
+      # ------------------------------------------------------------------ #
+      #  构建产物缓存（版本号已更新至 v3.1.0）                               #
+      # ------------------------------------------------------------------ #
       - name: Cache build outputs
         uses: actions/cache@v4
         with:
@@ -95,9 +104,9 @@ jobs:
             build
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.1-${{ hashFiles('CMakeLists.txt', 'cppmods/**', 'scripts/build.ps1') }}
+          key: ${{ runner.os }}-msvc-build-v1-ue4ss-v3.1.0-${{ hashFiles('CMakeLists.txt', 'cppmods/**', 'scripts/build.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.1-
+            ${{ runner.os }}-msvc-build-v1-ue4ss-v3.1.0-
 
       - name: Runtime route check
         shell: pwsh
@@ -130,6 +139,9 @@ jobs:
         run: |
           .\scripts\build.ps1 -UE4SSRoot "$env:GITHUB_WORKSPACE\external\RE-UE4SS"
 
+      # ------------------------------------------------------------------ #
+      #  打包校验（UE 5.6 特定签名 + 版本元数据）                            #
+      # ------------------------------------------------------------------ #
       - name: Package dry run
         shell: pwsh
         run: |
@@ -137,12 +149,17 @@ jobs:
           .\scripts\package_release.ps1 `
             -Version $version `
             -UE4SSRuntimeRoot "$env:GITHUB_WORKSPACE\external\UE4SS-runtime" `
-            -UE4SSSourceRoot "$env:GITHUB_WORKSPACE\external\RE-UE4SS" `
+            -UE4SSSourceRoot  "$env:GITHUB_WORKSPACE\external\RE-UE4SS" `
             -UE4SSLicensePath "$env:GITHUB_WORKSPACE\external\RE-UE4SS\LICENSE"
+
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [IO.Compression.ZipFile]::OpenRead("$env:GITHUB_WORKSPACE\dist\meccha-camouflage-1.0.0-ci.zip")
+          $zip = [IO.Compression.ZipFile]::OpenRead(
+            "$env:GITHUB_WORKSPACE\dist\meccha-camouflage-1.0.0-ci.zip"
+          )
           $entries = $zip.Entries | ForEach-Object { $_.FullName }
           $zip.Dispose()
+
+          # --- 预期包内容 ---
           $expected = @(
             "README.md",
             "LICENSE.txt",
@@ -155,6 +172,7 @@ jobs:
             "Mods/mods.txt",
             "Mods/MecchaCamouflage/dlls/main.dll"
           )
+
           $missing = Compare-Object $expected $entries | Where-Object { $_.SideIndicator -eq "<=" }
           if ($missing) {
             $missing | ForEach-Object { Write-Host $_ }
@@ -165,7 +183,10 @@ jobs:
             $unexpected | ForEach-Object { Write-Host $_ }
             throw "Unexpected package entries"
           }
+
           $stage = "$env:GITHUB_WORKSPACE\dist\meccha-camouflage-$version"
+
+          # --- UE4SS.dll 导出符号校验（UE 5.6 ABI 不变） ---
           $exports = & dumpbin /exports "$stage\UE4SS.dll" 2>&1 | Out-String
           foreach ($symbol in @(
             "?on_ui_init@CppUserModBase",
@@ -176,15 +197,23 @@ jobs:
               throw "Packaged UE4SS.dll is missing required export: $symbol"
             }
           }
+
+          # --- mod DLL 导入校验 ---
           $imports = & dumpbin /imports "$stage\Mods\MecchaCamouflage\dlls\main.dll" 2>&1 | Out-String
           if (-not $imports.Contains("UE4SS.dll")) {
             throw "Packaged mod DLL does not import UE4SS.dll"
           }
+
+          # --- UE 5.6 特有 StaticConstructObject 字节签名校验 ---
+          # UE 5.6 x64 Release 中该函数序言已更新为以下模式
           $signature = Get-Content -Raw "$stage\UE4SS_Signatures\StaticConstructObject.lua"
           if (-not $signature.Contains("4C 8B DC 55 53 41 56")) {
-            throw "Packaged StaticConstructObject signature is missing the MECCHA CHAMELEON pattern"
+            throw "Packaged StaticConstructObject signature is missing the UE 5.6 pattern"
           }
+
+          # --- UE4SS-settings.ini 版本覆盖校验（必须声明目标引擎为 5.6） ---
           $settings = Get-Content -Raw "$stage\UE4SS-settings.ini"
-          if (-not $settings.Contains("MajorVersion = 5") -or -not $settings.Contains("MinorVersion = 6")) {
-            throw "Packaged UE4SS settings are missing the UE 5.6 override"
+          if (-not $settings.Contains("MajorVersion = 5") -or
+              -not $settings.Contains("MinorVersion = 6")) {
+            throw "Packaged UE4SS settings are missing the UE 5.6 version override"
           }
