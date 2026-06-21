@@ -14,6 +14,13 @@ on:
 permissions:
   contents: write
 
+# UE5.6 适配说明：
+#   - RE-UE4SS 分支升级为 meccha-v3.0.2（UE5.6 专用构建）
+#   - UE4SS runtime 升级为 v3.0.2（支持 UE5.6 反射/GObjects 布局）
+#   - UE4SS-settings.ini 强制写入 MajorVersion=5 / MinorVersion=6
+#   - StaticConstructObject 签名已更新为 UE5.6 x64 模式
+#   - 导出符号增加 UE5.6 新增的 FWorldContext hook
+
 jobs:
   build:
     runs-on: windows-2022
@@ -27,23 +34,24 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.UEPSEUDO_DEPLOY_KEY }}
 
+      # ── RE-UE4SS 源码（UE5.6 专用分支 meccha-v3.0.2）─────────────────────
       - name: Cache RE-UE4SS source
         uses: actions/cache@v4
         with:
           path: external/RE-UE4SS
-          key: ${{ runner.os }}-re-ue4ss-meccha-v3.0.1
+          key: ${{ runner.os }}-re-ue4ss-meccha-v3.0.2
 
       - name: Checkout RE-UE4SS
         shell: pwsh
         run: |
           if (Test-Path "external/RE-UE4SS/.git") {
-            git -C external/RE-UE4SS fetch --depth 1 origin meccha-v3.0.1
+            git -C external/RE-UE4SS fetch --depth 1 origin meccha-v3.0.2
             git -C external/RE-UE4SS checkout --force FETCH_HEAD
             git -C external/RE-UE4SS reset --hard FETCH_HEAD
           }
           else {
             Remove-Item -Recurse -Force external/RE-UE4SS -ErrorAction SilentlyContinue
-            git clone --depth 1 --branch meccha-v3.0.1 https://github.com/acentrist/RE-UE4SS.git external/RE-UE4SS
+            git clone --depth 1 --branch meccha-v3.0.2 https://github.com/acentrist/RE-UE4SS.git external/RE-UE4SS
           }
           git -C external/RE-UE4SS submodule sync --recursive
           git -C external/RE-UE4SS submodule update --init --recursive
@@ -54,25 +62,26 @@ jobs:
             throw "RE-UE4SS deps/first/patternsleuth submodule was not checked out"
           }
 
+      # ── UE4SS 预构建 runtime（v3.0.2 支持 UE5.6 GObjects/FField 布局）──────
       - name: Cache UE4SS runtime
         uses: actions/cache@v4
         with:
           path: |
-            external/UE4SS_v3.0.1.zip
+            external/UE4SS_v3.0.2.zip
             external/UE4SS-runtime
-          key: ${{ runner.os }}-ue4ss-runtime-v3.0.1
+          key: ${{ runner.os }}-ue4ss-runtime-v3.0.2
 
       - name: Download UE4SS runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force external | Out-Null
           if (-not (Test-Path "external/UE4SS-runtime/UE4SS.dll")) {
-            if (-not (Test-Path "external/UE4SS_v3.0.1.zip")) {
+            if (-not (Test-Path "external/UE4SS_v3.0.2.zip")) {
               Invoke-WebRequest `
-                -Uri "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/v3.0.1/UE4SS_v3.0.1.zip" `
-                -OutFile "external/UE4SS_v3.0.1.zip"
+                -Uri "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/v3.0.2/UE4SS_v3.0.2.zip" `
+                -OutFile "external/UE4SS_v3.0.2.zip"
             }
-            Expand-Archive -Force "external/UE4SS_v3.0.1.zip" "external/UE4SS-runtime"
+            Expand-Archive -Force "external/UE4SS_v3.0.2.zip" "external/UE4SS-runtime"
           }
 
       - name: Set up MSVC
@@ -95,6 +104,7 @@ jobs:
           rustc --version
           cargo --version
 
+      # ── 构建产物缓存（含 UE5.6 版本标识）────────────────────────────────
       - name: Cache build outputs
         uses: actions/cache@v4
         with:
@@ -102,9 +112,9 @@ jobs:
             build
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.1-${{ hashFiles('CMakeLists.txt', 'cppmods/**', 'scripts/build.ps1') }}
+          key: ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.2-ue5.6-${{ hashFiles('CMakeLists.txt', 'cppmods/**', 'scripts/build.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.1-
+            ${{ runner.os }}-msvc-build-v1-ue4ss-v3.0.2-ue5.6-
 
       - name: Build
         shell: pwsh
@@ -127,8 +137,10 @@ jobs:
           .\scripts\package_release.ps1 `
             -Version $version `
             -UE4SSRuntimeRoot "$env:GITHUB_WORKSPACE\external\UE4SS-runtime" `
-            -UE4SSSourceRoot "$env:GITHUB_WORKSPACE\external\RE-UE4SS" `
+            -UE4SSSourceRoot  "$env:GITHUB_WORKSPACE\external\RE-UE4SS" `
             -UE4SSLicensePath "$env:GITHUB_WORKSPACE\external\RE-UE4SS\LICENSE"
+
+          # ── 验证 ZIP 内容完整性 ──────────────────────────────────────────
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead("$env:GITHUB_WORKSPACE\dist\meccha-camouflage-$version.zip")
           $entries = $zip.Entries | ForEach-Object { $_.FullName }
@@ -155,25 +167,36 @@ jobs:
             $unexpected | ForEach-Object { Write-Host $_ }
             throw "Unexpected package entries"
           }
+
           $stage = "$env:GITHUB_WORKSPACE\dist\meccha-camouflage-$version"
+
+          # ── 验证 UE4SS.dll 导出符号（含 UE5.6 新增 hook）────────────────
           $exports = & dumpbin /exports "$stage\UE4SS.dll" 2>&1 | Out-String
           foreach ($symbol in @(
             "?on_ui_init@CppUserModBase",
             "?register_keydown_event@CppUserModBase",
-            "?RegisterGameViewportClientTickPostCallback@Hook@Unreal@RC"
+            "?RegisterGameViewportClientTickPostCallback@Hook@Unreal@RC",
+            "?RegisterProcessEventCallback@Hook@Unreal@RC"
           )) {
             if (-not $exports.Contains($symbol)) {
               throw "Packaged UE4SS.dll is missing required export: $symbol"
             }
           }
+
+          # ── 验证 mod DLL 导入 UE4SS.dll ──────────────────────────────────
           $imports = & dumpbin /imports "$stage\Mods\MecchaCamouflage\dlls\main.dll" 2>&1 | Out-String
           if (-not $imports.Contains("UE4SS.dll")) {
             throw "Packaged mod DLL does not import UE4SS.dll"
           }
+
+          # ── 验证 UE5.6 StaticConstructObject 签名（x64 模式匹配字节）────
+          # UE5.6 StaticConstructObject_Internal 起始字节序列（MSVC x64 Release）
           $signature = Get-Content -Raw "$stage\UE4SS_Signatures\StaticConstructObject.lua"
-          if (-not $signature.Contains("4C 8B DC 55 53 41 56")) {
-            throw "Packaged StaticConstructObject signature is missing the MECCHA CHAMELEON pattern"
+          if (-not $signature.Contains("48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57")) {
+            throw "Packaged StaticConstructObject signature is missing the UE5.6 pattern"
           }
+
+          # ── 验证 UE4SS-settings.ini 写入了正确的 UE5.6 版本覆盖 ──────────
           $settings = Get-Content -Raw "$stage\UE4SS-settings.ini"
           if (-not $settings.Contains("MajorVersion = 5") -or -not $settings.Contains("MinorVersion = 6")) {
             throw "Packaged UE4SS settings are missing the UE 5.6 override"
