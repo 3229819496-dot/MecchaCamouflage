@@ -65,7 +65,7 @@ foreach ($RelativePath in @(
 
 $PackageName = "meccha-camouflage-$Version"
 $Stage = Join-Path $OutDir $PackageName
-$Win64Root = Join-Path $Stage "Chameleon\Binaries\Win64"
+$Win64Root = $Stage
 $UE4SSRoot = Join-Path $Win64Root "ue4ss"
 $ModsRoot = Join-Path $UE4SSRoot "Mods"
 $ModDllDir = Join-Path $ModsRoot "$ModName\dlls"

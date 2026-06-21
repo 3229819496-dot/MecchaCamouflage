@@ -100,11 +100,11 @@ jobs:
             "LICENSE.txt",
             "THIRD_PARTY_NOTICES.md",
             "UE4SS_LICENSE.txt",
-            "Chameleon/Binaries/Win64/dwmapi.dll",
-            "Chameleon/Binaries/Win64/ue4ss/UE4SS.dll",
-            "Chameleon/Binaries/Win64/ue4ss/UE4SS-settings.ini",
-            "Chameleon/Binaries/Win64/ue4ss/Mods/mods.txt",
-            "Chameleon/Binaries/Win64/ue4ss/Mods/MecchaCamouflage/dlls/main.dll"
+            "dwmapi.dll",
+            "ue4ss/UE4SS.dll",
+            "ue4ss/UE4SS-settings.ini",
+            "ue4ss/Mods/mods.txt",
+            "ue4ss/Mods/MecchaCamouflage/dlls/main.dll"
           )
           $missing = Compare-Object $expected $entries | Where-Object { $_.SideIndicator -eq "<=" }
           if ($missing) {
